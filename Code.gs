@@ -24,16 +24,21 @@ function doPost(e) {
   try {
     const data = JSON.parse(e.postData.contents);
     const email = (data.email || "").trim();
+    const difficulty = (data.difficulty || "").trim();
 
     if (!email || !email.includes("@")) {
       return ContentService.createTextOutput("유효한 이메일을 입력해주세요.");
+    }
+
+    if (!difficulty || !DIFFICULTY_LEVELS.includes(difficulty)) {
+      return ContentService.createTextOutput("유효한 난이도를 선택해주세요.");
     }
 
     const sheetApp = SpreadsheetApp.openById(SHEET_ID);
     console.log(sheetApp)
     const sheet = sheetApp.getSheetByName(SHEET_SUBS)
     console.log(sheet)
-    sheet.appendRow([email, new Date()]);
+    sheet.appendRow([email, new Date(), difficulty]);
 
     return ContentService.createTextOutput("구독이 완료되었습니다!");
   } catch (err) {
@@ -48,25 +53,46 @@ function doPost(e) {
 function sendGptProblemsToRecipients() {
   const subsSheet = getOrCreateSubscribersSheet();
   const data = subsSheet.getDataRange().getValues();
-  const emails = data.slice(1).map(row => row[0]).filter(Boolean);
   const sentSheet = getOrCreateSentSheet();
 
-  for (const email of emails) {
-    const difficulty = getRandomDifficulty();
-    Logger.log(`🎯 [START] ${email}에게 ${difficulty} 문제 전송 시작`);
+  // 난이도별로 이메일 그룹화
+  const subscribersByDifficulty = {};
+  for (let i = 1; i < data.length; i++) {
+    const email = data[i][0];
+    const difficulty = data[i][2]; // 난이도 컬럼
+
+    if (!email || !difficulty) continue;
+
+    if (!subscribersByDifficulty[difficulty]) {
+      subscribersByDifficulty[difficulty] = [];
+    }
+    subscribersByDifficulty[difficulty].push(email);
+  }
+
+  // 각 난이도별로 문제 1개 가져와서 해당 난이도 구독자 전체에게 전송
+  for (const difficulty in subscribersByDifficulty) {
+    const emails = subscribersByDifficulty[difficulty];
+    Logger.log(`🎯 [START] ${difficulty} 문제 전송 시작 (${emails.length}명)`);
 
     try {
       const problemData = fetchUniqueProblem(sentSheet, difficulty);
       console.log(problemData);
       if (!problemData) {
-        Logger.log(`❌ ${email} - ${difficulty} 난이도 문제 가져오기 실패`);
+        Logger.log(`❌ ${difficulty} 난이도 문제 가져오기 실패`);
         continue;
       }
 
       const problemId = extractProblemId(problemData["링크"]);
-      sendProblemEmail(sentSheet, email, difficulty, problemData, problemId);
+
+      // 같은 난이도의 모든 구독자에게 동일한 문제 전송
+      for (const email of emails) {
+        Logger.log(`📧 ${email}에게 ${difficulty} 문제 전송`);
+        sendProblemEmail(sentSheet, email, difficulty, problemData, problemId);
+      }
+
+      Logger.log(`✅ ${difficulty} 문제 ${emails.length}명에게 전송 완료`);
     } catch (error) {
-      Logger.log(`🚨 ${email} 전송 중 오류: ${error.message}`);
+      Logger.log(`🚨 ${difficulty} 전송 중 오류: ${error.message}`);
     }
   }
 }
@@ -110,7 +136,7 @@ function fetchUniqueProblem(sheet, difficulty) {
   return null;
 }
 
-/** 
+/**
  * ====================================================
  * GPT API 요청
  * ====================================================
@@ -137,7 +163,7 @@ function requestGpt(prompt) {
   return JSON.parse(res.getContentText())?.choices?.[0]?.message?.content || "";
 }
 
-/** 
+/**
  * ====================================================
  * GPT 응답 파싱
  * ====================================================
@@ -147,7 +173,7 @@ function parseGptResponse(content) {
   catch { return null; }
 }
 
-/** 
+/**
  * ====================================================
  * 문제 링크에서 ID 추출
  * ====================================================
@@ -157,7 +183,7 @@ function extractProblemId(link) {
   return match ? match[1] : null;
 }
 
-/** 
+/**
  * ====================================================
  * 시트 생성 / 로드
  * ====================================================
@@ -172,7 +198,7 @@ function getOrCreateSentSheet() {
 function getOrCreateSubscribersSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(SHEET_SUBS);
-  if (!sheet) sheet = ss.insertSheet(SHEET_SUBS).appendRow(["이메일", "등록일"]);
+  if (!sheet) sheet = ss.insertSheet(SHEET_SUBS).appendRow(["이메일", "등록일", "난이도"]);
   return ss.getSheetByName(SHEET_SUBS);
 }
 
